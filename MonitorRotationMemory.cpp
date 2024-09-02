@@ -56,9 +56,7 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 
     MSG msg;
 
-
-    auto monitors = listMonitors();
-    serializeMonitors(monitors);
+    fixMonitorRotations();
 
     // Main message loop:
     while (GetMessage(&msg, nullptr, 0, 0))
