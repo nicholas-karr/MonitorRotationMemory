@@ -13,3 +13,11 @@
 #include <malloc.h>
 #include <memory.h>
 #include <tchar.h>
+
+#include <shellapi.h>
+#include <commctrl.h>
+#include <strsafe.h>
+
+#include <iostream>
+
+#include "resource.h"

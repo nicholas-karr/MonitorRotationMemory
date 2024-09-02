@@ -2,7 +2,7 @@
 //
 
 #include "framework.h"
-#include "MonitorRotationMemory.h"
+#include "monitor.h"
 
 #define MAX_LOADSTRING 100
 
@@ -11,11 +11,20 @@ HINSTANCE hInst;                                // current instance
 WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
 WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
 
+UINT const WMAPP_NOTIFYCALLBACK = WM_APP + 1;
+UINT const WMAPP_HIDEFLYOUT = WM_APP + 2;
+
+
 // Forward declarations of functions included in this code module:
-ATOM                MyRegisterClass(HINSTANCE hInstance);
+ATOM                RegisterWindowClass(PCWSTR pszClassName, PCWSTR pszMenuName, WNDPROC lpfnWndProc);
 BOOL                InitInstance(HINSTANCE, int);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
+LRESULT CALLBACK    FlyoutWndProc(HWND, UINT, WPARAM, LPARAM);
 INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
+
+int main() {
+    return _tWinMain(GetModuleHandle(NULL), NULL, GetCommandLine(), SW_SHOW);
+}
 
 int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
                      _In_opt_ HINSTANCE hPrevInstance,
@@ -30,25 +39,41 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
     // Initialize global strings
     LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
     LoadStringW(hInstance, IDC_MONITORROTATIONMEMORY, szWindowClass, MAX_LOADSTRING);
-    MyRegisterClass(hInstance);
+    
+    hInst = hInstance; // Store instance handle in our global variable
+    RegisterWindowClass(szWindowClass, MAKEINTRESOURCEW(IDC_MONITORROTATIONMEMORY), WndProc);
 
     // Perform application initialization:
-    if (!InitInstance (hInstance, nCmdShow))
+    if (!InitInstance (hInstance, SW_HIDE))
     {
         return FALSE;
     }
 
     HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_MONITORROTATIONMEMORY));
 
+    RegisterWindowClass(szWindowClass, MAKEINTRESOURCE(IDC_MONITORROTATIONMEMORY), WndProc);
+    RegisterWindowClass(szWindowClass, NULL, FlyoutWndProc);
+
     MSG msg;
+
+
+    auto monitors = listMonitors();
+    serializeMonitors(monitors);
 
     // Main message loop:
     while (GetMessage(&msg, nullptr, 0, 0))
     {
+        printf("%d %p %llu %llu %d %d %d\n", msg.message, msg.hwnd, msg.wParam, msg.lParam, msg.pt.x, msg.pt.y, msg.time);
+
         if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
         {
             TranslateMessage(&msg);
             DispatchMessage(&msg);
+        }
+
+        if (msg.message == WM_DISPLAYCHANGE)
+        {
+            std::cout << "was display\n";
         }
     }
 
@@ -62,22 +87,22 @@ int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
 //
 //  PURPOSE: Registers the window class.
 //
-ATOM MyRegisterClass(HINSTANCE hInstance)
+ATOM RegisterWindowClass(PCWSTR pszClassName, PCWSTR pszMenuName, WNDPROC lpfnWndProc)
 {
     WNDCLASSEXW wcex;
 
     wcex.cbSize = sizeof(WNDCLASSEX);
 
     wcex.style          = CS_HREDRAW | CS_VREDRAW;
-    wcex.lpfnWndProc    = WndProc;
+    wcex.lpfnWndProc    = lpfnWndProc;// WndProc;
     wcex.cbClsExtra     = 0;
     wcex.cbWndExtra     = 0;
-    wcex.hInstance      = hInstance;
-    wcex.hIcon          = LoadIcon(hInstance, MAKEINTRESOURCE(IDI_MONITORROTATIONMEMORY));
+    wcex.hInstance      = hInst;
+    wcex.hIcon          = LoadIcon(hInst, MAKEINTRESOURCE(IDI_MONITORROTATIONMEMORY));
     wcex.hCursor        = LoadCursor(nullptr, IDC_ARROW);
     wcex.hbrBackground  = (HBRUSH)(COLOR_WINDOW+1);
-    wcex.lpszMenuName   = MAKEINTRESOURCEW(IDC_MONITORROTATIONMEMORY);
-    wcex.lpszClassName  = szWindowClass;
+    wcex.lpszMenuName   = pszMenuName;// MAKEINTRESOURCEW(IDC_MONITORROTATIONMEMORY);
+    wcex.lpszClassName  = pszClassName;// szWindowClass;
     wcex.hIconSm        = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
 
     return RegisterClassExW(&wcex);
@@ -95,8 +120,6 @@ ATOM MyRegisterClass(HINSTANCE hInstance)
 //
 BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 {
-   hInst = hInstance; // Store instance handle in our global variable
-
    HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
       CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
 
@@ -123,6 +146,11 @@ BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
 //
 LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (message == WM_DISPLAYCHANGE)
+    {
+        std::cout << "was display\n";
+    }
+
     switch (message)
     {
     case WM_COMMAND:
@@ -162,6 +190,11 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
 // Message handler for about box.
 INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
 {
+    if (message == WM_DISPLAYCHANGE)
+    {
+        std::cout << "was display\n";
+    }
+
     UNREFERENCED_PARAMETER(lParam);
     switch (message)
     {
@@ -177,4 +210,61 @@ INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
         break;
     }
     return (INT_PTR)FALSE;
+}
+
+void FlyoutPaint(HWND hwnd, HDC hdc)
+{
+    // Since this is a DPI aware application (see DeclareDPIAware.manifest), if the flyout window
+    // were to show text we would need to increase the size. We could also have multiple sizes of
+    // the bitmap image and show the appropriate image for each DPI, but that would complicate the
+    // sample.
+    static HBITMAP hbmp = NULL;
+    if (hbmp == NULL)
+    {
+        hbmp = (HBITMAP)LoadImage(hInst, MAKEINTRESOURCE(IDB_HIST_DISABLED), IMAGE_BITMAP, 0, 0, 0);
+    }
+    if (hbmp)
+    {
+        RECT rcClient;
+        GetClientRect(hwnd, &rcClient);
+        HDC hdcMem = CreateCompatibleDC(hdc);
+        if (hdcMem)
+        {
+            HGDIOBJ hBmpOld = SelectObject(hdcMem, hbmp);
+            BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, hdcMem, 0, 0, SRCCOPY);
+            SelectObject(hdcMem, hBmpOld);
+            DeleteDC(hdcMem);
+        }
+    }
+}
+
+LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    if (message == WM_DISPLAYCHANGE)
+    {
+        std::cout << "was display\n";
+    }
+
+    switch (message)
+    {
+    case WM_PAINT:
+    {
+        // paint a pretty picture
+        PAINTSTRUCT ps;
+        HDC hdc = BeginPaint(hwnd, &ps);
+        FlyoutPaint(hwnd, hdc);
+        EndPaint(hwnd, &ps);
+    }
+    break;
+    case WM_ACTIVATE:
+        if (LOWORD(wParam) == WA_INACTIVE)
+        {
+            // when the flyout window loses focus, hide it.
+            PostMessage(GetParent(hwnd), WMAPP_HIDEFLYOUT, 0, 0);
+        }
+        break;
+    default:
+        return DefWindowProc(hwnd, message, wParam, lParam);
+    }
+    return 0;
 }
