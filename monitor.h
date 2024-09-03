@@ -1,7 +1,9 @@
 #pragma once
 
-#include <Windows.h>
-#include <shlobj.h>
+#include "framework.h"
+
+#include <ShlObj_core.h>
+#include <KnownFolders.h>
 
 #include <iostream>
 #include <string>
@@ -27,58 +29,25 @@ std::string utf16ToUtf8(const std::wstring& str)
 struct MonitorInfo
 {
 	// Raw device name like \\.\DISPLAY7\Monitor0
-	// Not stable across restarts
+	// Not stable across restarts, so it is not stored, but is unique
 	std::wstring deviceName;
 
-	// Human-readable name like Wide viewing angle & High density FlexView Display 1920x1200 or Generic PnP MonitorInfo
+	// Human-readable name like "Wide viewing angle & High density FlexView Display 1920x1200" or "Generic PnP Monitor"
+	// Stable, but not unique if two of the same monitor are used
 	std::wstring monitorName;
 
+	// Screen size, swaps when rotated 90 or 270 degrees
 	DWORD width;
 	DWORD height;
 
+	// Position on the global canvas
+	// 0,0 for the main monitor
 	POINTL pos;
 
+	// One of DMDO_DEFAULT (Landscape), DMDO_90 (Portrait), DMDO_180 (Flipped Landscape), or DMDO_270 (Flipped Portrait)
 	DWORD rotation;
 
-	// One of DMDO_DEFAULT (Landscape), DMDO_90 (Portrait)
-	// Don't use DMDO_180, DMDO_270
-	bool setProps(const MonitorInfo& ref)
-	{
-		DEVMODE mode = {};
-		mode.dmSize = sizeof(mode);
-
-		assert(EnumDisplaySettings(deviceName.c_str(), ENUM_CURRENT_SETTINGS, &mode));
-
-		DEVMODE modeBackup;
-		memcpy((void*)&modeBackup, (void*)&mode, sizeof(mode));
-
-		mode.dmPelsWidth = ref.width;
-		mode.dmPelsHeight = ref.height;
-		mode.dmPosition.x = ref.pos.x;
-		mode.dmPosition.y = ref.pos.y;
-		mode.dmDisplayOrientation = ref.rotation;
-
-		if (memcmp((void*)&modeBackup, (void*)&mode, sizeof(mode)) == 0)
-		{
-			std::cout << "Nothing changed\n";
-			return true;
-		}
-
-		// Never use CDS_UPDATEREGISTRY, so the effects of the app do not persist across reboots
-		long ret = ChangeDisplaySettingsEx(deviceName.c_str(), &mode, nullptr, 0, nullptr);
-
-		if (ret == DISP_CHANGE_SUCCESSFUL)
-		{
-			this->rotation = rotation;
-			return true;
-		}
-		else
-		{
-			return false;
-		}
-	}
-
-	bool eqProps(const MonitorInfo& rhs) const noexcept
+	bool operator==(const MonitorInfo& rhs) const noexcept
 	{
 		return this->monitorName == rhs.monitorName 
 			&& this->width == this->width
@@ -93,14 +62,52 @@ std::ostream& operator<<(std::ostream& os, const MonitorInfo& i)
 {
 	std::string name = utf16ToUtf8(i.monitorName);
 
-	// Who would use ` in a monitor name? Hopefully nobody.
+	// This is fine since it would be odd to have two different monitors whose names differed only
+	// by whether ` or , was used.
 	std::replace(name.begin(), name.end(), ',', '`');
 
+	// Output looks like:
+	// Wide viewing angle & High density FlexView Display 1920x1200,1200,1920,-1200,0,1
 	os << name << ','
 		<< i.width << ',' << i.height << ','
 		<< i.pos.x << ',' << i.pos.y << ','
 		<< i.rotation;
+
 	return os;
+}
+
+// Update a monitor using its device name (like \\.\DISPLAY7\Monitor0) to match ref
+// Returns true if something actually changed
+bool applyPropsToMonitor(std::wstring deviceName, const MonitorInfo& ref)
+{
+	DEVMODE mode = {};
+	mode.dmSize = sizeof(mode);
+
+	// Copy current settings to mode
+	nassert(EnumDisplaySettings(deviceName.c_str(), ENUM_CURRENT_SETTINGS, &mode));
+
+	// Keep a copy of mode for sensing duplication
+	DEVMODE modeBackup;
+	memcpy((void*)&modeBackup, (void*)&mode, sizeof(mode));
+
+	mode.dmPelsWidth = ref.width;
+	mode.dmPelsHeight = ref.height;
+	mode.dmPosition.x = ref.pos.x;
+	mode.dmPosition.y = ref.pos.y;
+	mode.dmDisplayOrientation = ref.rotation;
+
+	if (memcmp((void*)&modeBackup, (void*)&mode, sizeof(mode)) == 0)
+	{
+		std::wcout << L"Nothing changed on monitor " << deviceName << L"\n";
+		return false;
+	}
+
+	// Write with CDS_UPDATEREGISTRY and CDS_NORESET so that all monitors are changed in a single pass, than persisted at the end.
+	// This prevents positions that do not yet connect to a contiguous monitor from crashing the program.
+	long ret = ChangeDisplaySettingsEx(deviceName.c_str(), &mode, nullptr, (CDS_UPDATEREGISTRY | CDS_NORESET), nullptr);
+	nassert(ret == DISP_CHANGE_SUCCESSFUL);
+
+	return true;
 }
 
 // Configuration for a set of monitors
@@ -108,7 +115,7 @@ struct MonitorSetup
 {
 	std::vector<MonitorInfo> monitors;
 
-	static MonitorSetup getFromCurrent(DWORD settingsMode = ENUM_CURRENT_SETTINGS)
+	static MonitorSetup getCurrent(DWORD settingsMode = ENUM_CURRENT_SETTINGS)
 	{
 		MonitorSetup setup;
 
@@ -125,8 +132,16 @@ struct MonitorSetup
 				DEVMODE mode = {};
 				mode.dmSize = sizeof(mode);
 
-				assert(EnumDisplaySettingsEx(deviceName.c_str(), settingsMode, &mode, 0));
-				assert((mode.dmFields & DM_DISPLAYORIENTATION) && (mode.dmFields & DM_PELSHEIGHT) && (mode.dmFields & DM_PELSWIDTH));
+				nassert(EnumDisplaySettingsEx(deviceName.c_str(), settingsMode, &mode, 0) != 0);
+
+				// Make sure the required fields are populated
+				bool populated = (mode.dmFields & DM_DISPLAYORIENTATION) && (mode.dmFields & DM_PELSHEIGHT) && (mode.dmFields & DM_PELSWIDTH) && (mode.dmFields & DM_POSITION);
+
+				if (!populated)
+				{
+					std::wcout << L"Ignoring monitor " << deviceName << L"\n";
+					continue;
+				}
 
 				MonitorInfo next = {};
 				next.deviceName = deviceName;
@@ -145,12 +160,11 @@ struct MonitorSetup
 	}
 
 	// Using the monitor names and rotations from the reference, set the correct rotations and positions
-	// This struct knows the proper endpoints for this instance
+	// This struct holds the proper endpoints for this instance
 	bool setPropsFrom(const MonitorSetup& reference)
 	{
-		// The current main monitor is the one at 0,0
-		
-		// Monitors with the same (name, resolution) will all need to have the same rotation, there's no way to tell them apart
+		bool needToUpdate = false;
+
 		// Iterate over monitors that have yet to be set
 		std::vector<bool> consumed(reference.monitors.size());
 		for (auto& monitorItr : this->monitors)
@@ -158,29 +172,32 @@ struct MonitorSetup
 			bool didSet = false;
 
 			// Iterate over potential matches
-			for (int i = 0; i < reference.monitors.size(); i++)
+			for (int i = 0; !didSet && i < reference.monitors.size(); i++)
 			{
 				auto& monitorRefItr = reference.monitors[i];
 
 				if (!consumed[i] && monitorItr.monitorName == monitorRefItr.monitorName)
 				{
 					consumed[i] = true;
-					bool success = monitorItr.setProps(monitorRefItr);
+					bool changed = applyPropsToMonitor(monitorItr.deviceName, monitorRefItr);
 
-					if (success)
+					if (changed)
 					{
-						didSet = true;
-						break;
+						needToUpdate = true;
 					}
-					else
-					{
-						return false;
-					}
+
+					didSet = true;
 				}
 			}
 
 			// Did not find the right setup earlier!
-			assert(didSet);
+			nassert(didSet);
+		}
+
+		if (needToUpdate)
+		{
+			// Apply all changes from the registry
+			ChangeDisplaySettingsEx(NULL, NULL, NULL, 0, NULL);
 		}
 
 		return true;
@@ -200,7 +217,7 @@ std::filesystem::path getConfigFileFolder()
 {
 	wchar_t* pathPtr;
 	HRESULT hret = SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &pathPtr);
-	assert(hret == S_OK);
+	nassert(hret == S_OK);
 
 	std::filesystem::path path = pathPtr;
 	CoTaskMemFree(pathPtr);
@@ -219,6 +236,7 @@ std::filesystem::path getConfigFilePath()
 	return path;
 }
 
+// Parse MonitorSetup's from the config file
 std::vector<MonitorSetup> readConfigFile()
 {
 	std::ifstream file(getConfigFilePath(), 0);
@@ -226,15 +244,17 @@ std::vector<MonitorSetup> readConfigFile()
 	MonitorSetup setup;
 	std::vector<MonitorSetup> setups;
 	std::string lineStr;
+	std::stringstream lineStream;
 	while (std::getline(file, lineStr))
 	{
-		if (lineStr == "\n")
+		if (lineStr == "")
 		{
 			setups.push_back(setup);
 			setup = {};
 		}
 
-		std::stringstream lineStream(lineStr);
+		lineStream.clear();
+		lineStream << lineStr;
 
 		std::vector<std::string> entries;
 		std::string entry;
@@ -248,7 +268,7 @@ std::vector<MonitorSetup> readConfigFile()
 			continue;
 		}
 
-		assert(entries.size() == 6);
+		nassert(entries.size() == 6);
 		MonitorInfo next = { L"", utf8ToUtf16(entries[0]), std::stoul(entries[1]), std::stoul(entries[2]), std::stol(entries[3]), std::stol(entries[4]), std::stoul(entries[5]) };
 
 		// Un-escape commas
@@ -258,11 +278,14 @@ std::vector<MonitorSetup> readConfigFile()
 	}
 	setups.push_back(setup);
 
+	// Reverse so that higher priority setups (last added) are seen first
+	std::reverse(setups.begin(), setups.end());
+
 	return setups;
 }
 
 // Write a new monitor config to the file
-void appendConfigFile(const MonitorSetup& setup)
+void appendConfigToFile(const MonitorSetup& setup)
 {
 	auto folder = getConfigFileFolder();
 
@@ -276,9 +299,8 @@ void appendConfigFile(const MonitorSetup& setup)
 	configOut << setup << "\n";
 }
 
-// Find the MonitorSetup from the config file that has the same names and resolutions of monitors as the current setup
-// Ignores rotation, as that is what is going to be imposed
-const MonitorSetup* findMatching(const MonitorSetup& current, const std::vector<MonitorSetup>& setups)
+// Find setup in setups that has the exact same names and numbers as current
+const MonitorSetup* findMatchingSetup(const MonitorSetup& current, const std::vector<MonitorSetup>& setups)
 {
 	for (auto& setupItr : setups)
 	{
@@ -314,19 +336,14 @@ const MonitorSetup* findMatching(const MonitorSetup& current, const std::vector<
 // Fixes monitor rotations to match the config file
 void fixMonitorRotations()
 {
-	auto current = MonitorSetup::getFromCurrent();
+	auto current = MonitorSetup::getCurrent();
 	auto allSetups = readConfigFile();
 
-	const MonitorSetup* nextSetup = findMatching(current, allSetups);
+	const MonitorSetup* nextSetup = findMatchingSetup(current, allSetups);
 
-	if (nextSetup == nullptr)
+	if (nextSetup != nullptr)
 	{
-		// We haven't seen this setup before, write it to the file
-		appendConfigFile(current);
-	}
-	else
-	{
-		std::cout << "apply?";
-		assert(current.setPropsFrom(*nextSetup));
+		std::cout << "Applying new config\n";
+		nassert(current.setPropsFrom(*nextSetup));
 	}
 }

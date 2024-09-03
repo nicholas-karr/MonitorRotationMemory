@@ -4,20 +4,25 @@
 
 #pragma once
 
-#include "targetver.h"
-#define WIN32_LEAN_AND_MEAN             // Exclude rarely-used stuff from Windows headers
-// Windows Header Files
 #include <windows.h>
-// C RunTime Header Files
+#include <shellapi.h>
+#include <commctrl.h>
+#include <strsafe.h>
+
 #include <stdlib.h>
 #include <malloc.h>
 #include <memory.h>
 #include <tchar.h>
 
-#include <shellapi.h>
-#include <commctrl.h>
-#include <strsafe.h>
-
 #include <iostream>
 
 #include "resource.h"
+
+bool crash(const char* file, int line)
+{
+	std::cout << "Assertion failed in " << file << ":" << line << '\n';
+	exit(-1);
+}
+
+// Yes, this leaves all file handles open
+#define nassert(cond) (!!(cond) || crash(__FILE__, __LINE__))

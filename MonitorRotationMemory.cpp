@@ -1,265 +1,242 @@
-// MonitorRotationMemory.cpp : Defines the entry point for the application.
-//
-
 #include "framework.h"
 #include "monitor.h"
+#include "timer.h"
 
-#define MAX_LOADSTRING 100
+// Handle to the application module
+HINSTANCE appHinst = NULL;
 
-// Global Variables:
-HINSTANCE hInst;                                // current instance
-WCHAR szTitle[MAX_LOADSTRING];                  // The title bar text
-WCHAR szWindowClass[MAX_LOADSTRING];            // the main window class name
-
+// Called when system tray icon is clicked
 UINT const WMAPP_NOTIFYCALLBACK = WM_APP + 1;
-UINT const WMAPP_HIDEFLYOUT = WM_APP + 2;
 
+constexpr wchar_t WINDOW_CLASS[] = L"MonitorRotationMemory";
 
-// Forward declarations of functions included in this code module:
-ATOM                RegisterWindowClass(PCWSTR pszClassName, PCWSTR pszMenuName, WNDPROC lpfnWndProc);
-BOOL                InitInstance(HINSTANCE, int);
+// Use a guid to uniquely identify our icon
+class __declspec(uuid("f22385ff-7b02-47c4-b21c-2cb1390bab57")) APP_ICON_ID;
+
+void                RegisterWindowClass(PCWSTR pszClassName, PCWSTR pszMenuName, WNDPROC lpfnWndProc);
 LRESULT CALLBACK    WndProc(HWND, UINT, WPARAM, LPARAM);
-LRESULT CALLBACK    FlyoutWndProc(HWND, UINT, WPARAM, LPARAM);
-INT_PTR CALLBACK    About(HWND, UINT, WPARAM, LPARAM);
+void                ShowContextMenu(HWND hwnd, POINT pt);
+BOOL                AddNotificationIcon(HWND hwnd);
+BOOL                DeleteNotificationIcon();
 
+// Compat to allow launching as a console mode application with a terminal (to see the logs)
 int main() {
     return _tWinMain(GetModuleHandle(NULL), NULL, GetCommandLine(), SW_SHOW);
 }
 
-int APIENTRY wWinMain(_In_ HINSTANCE hInstance,
-                     _In_opt_ HINSTANCE hPrevInstance,
-                     _In_ LPWSTR    lpCmdLine,
-                     _In_ int       nCmdShow)
+int APIENTRY wWinMain(HINSTANCE hInstance, HINSTANCE, PWSTR /*lpCmdLine*/, int nCmdShow)
 {
-    UNREFERENCED_PARAMETER(hPrevInstance);
-    UNREFERENCED_PARAMETER(lpCmdLine);
+    appHinst = hInstance;
+    RegisterWindowClass(WINDOW_CLASS, MAKEINTRESOURCE(IDC_MONITORROTATIONMEMORY), WndProc);
 
-    // TODO: Place code here.
+    // Create the hidden main window. It is never shown.
+    WCHAR szTitle[100];
+    LoadString(hInstance, IDS_APP_TITLE, szTitle, ARRAYSIZE(szTitle));
+    HWND hwnd = CreateWindow(WINDOW_CLASS, szTitle, SW_HIDE,
+        CW_USEDEFAULT, 0, 250, 200, NULL, NULL, appHinst, NULL);
+    nassert(hwnd);
 
-    // Initialize global strings
-    LoadStringW(hInstance, IDS_APP_TITLE, szTitle, MAX_LOADSTRING);
-    LoadStringW(hInstance, IDC_MONITORROTATIONMEMORY, szWindowClass, MAX_LOADSTRING);
-    
-    hInst = hInstance; // Store instance handle in our global variable
-    RegisterWindowClass(szWindowClass, MAKEINTRESOURCEW(IDC_MONITORROTATIONMEMORY), WndProc);
+    initMonitorTimer();
 
-    // Perform application initialization:
-    if (!InitInstance (hInstance, SW_HIDE))
-    {
-        return FALSE;
-    }
+    // Execute rotation for the first time
+    executeMonitorTimer(hwnd, 0, 0, 0);
 
-    HACCEL hAccelTable = LoadAccelerators(hInstance, MAKEINTRESOURCE(IDC_MONITORROTATIONMEMORY));
-
-    RegisterWindowClass(szWindowClass, MAKEINTRESOURCE(IDC_MONITORROTATIONMEMORY), WndProc);
-    RegisterWindowClass(szWindowClass, NULL, FlyoutWndProc);
-
+    // Main message loop
     MSG msg;
-
-    fixMonitorRotations();
-
-    // Main message loop:
-    while (GetMessage(&msg, nullptr, 0, 0))
+    while (GetMessage(&msg, NULL, 0, 0))
     {
-        printf("%d %p %llu %llu %d %d %d\n", msg.message, msg.hwnd, msg.wParam, msg.lParam, msg.pt.x, msg.pt.y, msg.time);
-
-        if (!TranslateAccelerator(msg.hwnd, hAccelTable, &msg))
-        {
-            TranslateMessage(&msg);
-            DispatchMessage(&msg);
-        }
-
-        if (msg.message == WM_DISPLAYCHANGE)
-        {
-            std::cout << "was display\n";
-        }
+        TranslateMessage(&msg);
+        DispatchMessage(&msg);
     }
 
-    return (int) msg.wParam;
-}
-
-
-
-//
-//  FUNCTION: MyRegisterClass()
-//
-//  PURPOSE: Registers the window class.
-//
-ATOM RegisterWindowClass(PCWSTR pszClassName, PCWSTR pszMenuName, WNDPROC lpfnWndProc)
-{
-    WNDCLASSEXW wcex;
-
-    wcex.cbSize = sizeof(WNDCLASSEX);
-
-    wcex.style          = CS_HREDRAW | CS_VREDRAW;
-    wcex.lpfnWndProc    = lpfnWndProc;// WndProc;
-    wcex.cbClsExtra     = 0;
-    wcex.cbWndExtra     = 0;
-    wcex.hInstance      = hInst;
-    wcex.hIcon          = LoadIcon(hInst, MAKEINTRESOURCE(IDI_MONITORROTATIONMEMORY));
-    wcex.hCursor        = LoadCursor(nullptr, IDC_ARROW);
-    wcex.hbrBackground  = (HBRUSH)(COLOR_WINDOW+1);
-    wcex.lpszMenuName   = pszMenuName;// MAKEINTRESOURCEW(IDC_MONITORROTATIONMEMORY);
-    wcex.lpszClassName  = pszClassName;// szWindowClass;
-    wcex.hIconSm        = LoadIcon(wcex.hInstance, MAKEINTRESOURCE(IDI_SMALL));
-
-    return RegisterClassExW(&wcex);
-}
-
-//
-//   FUNCTION: InitInstance(HINSTANCE, int)
-//
-//   PURPOSE: Saves instance handle and creates main window
-//
-//   COMMENTS:
-//
-//        In this function, we save the instance handle in a global variable and
-//        create and display the main program window.
-//
-BOOL InitInstance(HINSTANCE hInstance, int nCmdShow)
-{
-   HWND hWnd = CreateWindowW(szWindowClass, szTitle, WS_OVERLAPPEDWINDOW,
-      CW_USEDEFAULT, 0, CW_USEDEFAULT, 0, nullptr, nullptr, hInstance, nullptr);
-
-   if (!hWnd)
-   {
-      return FALSE;
-   }
-
-   ShowWindow(hWnd, nCmdShow);
-   UpdateWindow(hWnd);
-
-   return TRUE;
-}
-
-//
-//  FUNCTION: WndProc(HWND, UINT, WPARAM, LPARAM)
-//
-//  PURPOSE: Processes messages for the main window.
-//
-//  WM_COMMAND  - process the application menu
-//  WM_PAINT    - Paint the main window
-//  WM_DESTROY  - post a quit message and return
-//
-//
-LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    if (message == WM_DISPLAYCHANGE)
-    {
-        std::cout << "was display\n";
-    }
-
-    switch (message)
-    {
-    case WM_COMMAND:
-        {
-            int wmId = LOWORD(wParam);
-            // Parse the menu selections:
-            switch (wmId)
-            {
-            case IDM_ABOUT:
-                DialogBox(hInst, MAKEINTRESOURCE(IDD_ABOUTBOX), hWnd, About);
-                break;
-            case IDM_EXIT:
-                DestroyWindow(hWnd);
-                break;
-            default:
-                return DefWindowProc(hWnd, message, wParam, lParam);
-            }
-        }
-        break;
-    case WM_PAINT:
-        {
-            PAINTSTRUCT ps;
-            HDC hdc = BeginPaint(hWnd, &ps);
-            // TODO: Add any drawing code that uses hdc here...
-            EndPaint(hWnd, &ps);
-        }
-        break;
-    case WM_DESTROY:
-        PostQuitMessage(0);
-        break;
-    default:
-        return DefWindowProc(hWnd, message, wParam, lParam);
-    }
     return 0;
 }
 
-// Message handler for about box.
-INT_PTR CALLBACK About(HWND hDlg, UINT message, WPARAM wParam, LPARAM lParam)
+void RegisterWindowClass(PCWSTR pszClassName, PCWSTR pszMenuName, WNDPROC lpfnWndProc)
 {
-    if (message == WM_DISPLAYCHANGE)
-    {
-        std::cout << "was display\n";
-    }
+    WNDCLASSEX wcex = { sizeof(wcex) };
+    wcex.style = CS_HREDRAW | CS_VREDRAW;
+    wcex.lpfnWndProc = lpfnWndProc;
+    wcex.hInstance = appHinst;
+    wcex.hIcon = LoadIcon(appHinst, MAKEINTRESOURCE(IDI_MONITORROTATIONMEMORY));
+    wcex.hCursor = LoadCursor(NULL, IDC_ARROW);
+    wcex.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wcex.lpszMenuName = pszMenuName;
+    wcex.lpszClassName = pszClassName;
+    RegisterClassEx(&wcex);
+}
 
-    UNREFERENCED_PARAMETER(lParam);
+BOOL AddNotificationIcon(HWND hwnd)
+{
+    NOTIFYICONDATA nid = { sizeof(nid) };
+    nid.hWnd = hwnd;
+    // add the icon, setting the icon, tooltip, and callback message.
+    // the icon will be identified with the GUID
+    nid.uFlags = NIF_ICON | NIF_TIP | NIF_MESSAGE | NIF_SHOWTIP | NIF_GUID;
+    nid.guidItem = __uuidof(APP_ICON_ID);
+    nid.uCallbackMessage = WMAPP_NOTIFYCALLBACK;
+    LoadIconMetric(appHinst, MAKEINTRESOURCE(IDI_MONITORROTATIONMEMORY), LIM_SMALL, &nid.hIcon);
+    LoadString(appHinst, IDS_TOOLTIP, nid.szTip, ARRAYSIZE(nid.szTip));
+    Shell_NotifyIcon(NIM_ADD, &nid);
+
+    // NOTIFYICON_VERSION_4 is prefered
+    nid.uVersion = NOTIFYICON_VERSION_4;
+    return Shell_NotifyIcon(NIM_SETVERSION, &nid);
+}
+
+BOOL DeleteNotificationIcon()
+{
+    NOTIFYICONDATA nid = { sizeof(nid) };
+    nid.uFlags = NIF_GUID;
+    nid.guidItem = __uuidof(APP_ICON_ID);
+    return Shell_NotifyIcon(NIM_DELETE, &nid);
+}
+
+void PositionFlyout(HWND hwnd, REFGUID guidIcon)
+{
+    // find the position of our system tray icon
+    NOTIFYICONIDENTIFIER nii = { sizeof(nii) };
+    nii.guidItem = guidIcon;
+    RECT rcIcon;
+    HRESULT hr = Shell_NotifyIconGetRect(&nii, &rcIcon);
+    if (SUCCEEDED(hr))
+    {
+        // display the flyout in an appropriate position close to the printer icon
+        POINT const ptAnchor = { (rcIcon.left + rcIcon.right) / 2, (rcIcon.top + rcIcon.bottom) / 2 };
+
+        RECT rcWindow;
+        GetWindowRect(hwnd, &rcWindow);
+        SIZE sizeWindow = { rcWindow.right - rcWindow.left, rcWindow.bottom - rcWindow.top };
+
+        if (CalculatePopupWindowPosition(&ptAnchor, &sizeWindow, TPM_VERTICAL | TPM_VCENTERALIGN | TPM_CENTERALIGN | TPM_WORKAREA, &rcIcon, &rcWindow))
+        {
+            // position the flyout and make it the foreground window
+            SetWindowPos(hwnd, HWND_TOPMOST, rcWindow.left, rcWindow.top, 0, 0, SWP_NOSIZE | SWP_SHOWWINDOW);
+        }
+    }
+}
+
+void ShowContextMenu(HWND hwnd, POINT pt)
+{
+    HMENU contextMenu = LoadMenu(appHinst, MAKEINTRESOURCE(IDC_CONTEXTMENU));
+    if (contextMenu)
+    {
+        HMENU hSubMenu = GetSubMenu(contextMenu, 0);
+        if (hSubMenu)
+        {
+            // Mutate submenu pause to have correct checkmark
+            MENUITEMINFO info = {};
+            info.cbSize = sizeof(info);
+            info.fMask = MIIM_STATE;
+            info.fState = paused ? MFS_CHECKED : MFS_UNCHECKED;
+
+            nassert(SetMenuItemInfo(hSubMenu, IDM_PAUSE, false, &info));
+
+            // our window must be foreground before calling TrackPopupMenu or the menu will not disappear when the user clicks away
+            SetForegroundWindow(hwnd);
+
+            // respect menu drop alignment
+            UINT uFlags = TPM_RIGHTBUTTON;
+            if (GetSystemMetrics(SM_MENUDROPALIGNMENT) != 0)
+            {
+                uFlags |= TPM_RIGHTALIGN;
+            }
+            else
+            {
+                uFlags |= TPM_LEFTALIGN;
+            }
+
+            TrackPopupMenuEx(hSubMenu, uFlags, pt.x, pt.y, hwnd, NULL);
+        }
+        DestroyMenu(contextMenu);
+    }
+}
+
+LRESULT CALLBACK WndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
+{
+    static HWND s_hwndFlyout = NULL;
+
     switch (message)
     {
-    case WM_INITDIALOG:
-        return (INT_PTR)TRUE;
-
-    case WM_COMMAND:
-        if (LOWORD(wParam) == IDOK || LOWORD(wParam) == IDCANCEL)
+    case WM_DISPLAYCHANGE:
+        std::cout << "Noticed display event\n";
+        setMonitorTimer(hwnd);
+        break;
+    case WM_CREATE:
+        // add the notification icon
+        if (!AddNotificationIcon(hwnd))
         {
-            EndDialog(hDlg, LOWORD(wParam));
-            return (INT_PTR)TRUE;
+            MessageBox(hwnd,
+                L"Please read the ReadMe.txt file for troubleshooting",
+                L"Error adding icon", MB_OK);
+            return -1;
         }
         break;
-    }
-    return (INT_PTR)FALSE;
-}
-
-void FlyoutPaint(HWND hwnd, HDC hdc)
-{
-    // Since this is a DPI aware application (see DeclareDPIAware.manifest), if the flyout window
-    // were to show text we would need to increase the size. We could also have multiple sizes of
-    // the bitmap image and show the appropriate image for each DPI, but that would complicate the
-    // sample.
-    static HBITMAP hbmp = NULL;
-    if (hbmp == NULL)
+    case WM_COMMAND:
     {
-        hbmp = (HBITMAP)LoadImage(hInst, MAKEINTRESOURCE(IDB_HIST_DISABLED), IMAGE_BITMAP, 0, 0, 0);
-    }
-    if (hbmp)
-    {
-        RECT rcClient;
-        GetClientRect(hwnd, &rcClient);
-        HDC hdcMem = CreateCompatibleDC(hdc);
-        if (hdcMem)
+        int const wmId = LOWORD(wParam);
+        // Parse the menu selections:
+        switch (wmId)
         {
-            HGDIOBJ hBmpOld = SelectObject(hdcMem, hbmp);
-            BitBlt(hdc, 0, 0, rcClient.right, rcClient.bottom, hdcMem, 0, 0, SRCCOPY);
-            SelectObject(hdcMem, hBmpOld);
-            DeleteDC(hdcMem);
-        }
-    }
-}
+        case IDM_ABOUT:
+            MessageBox(hwnd, L"By Nicholas Karr\nvcinventerman on Github\nhttps://karrmedia.com", L"MonitorRotationMemory", MB_OK);
+            break;
 
-LRESULT CALLBACK FlyoutWndProc(HWND hwnd, UINT message, WPARAM wParam, LPARAM lParam)
-{
-    if (message == WM_DISPLAYCHANGE)
-    {
-        std::cout << "was display\n";
-    }
-
-    switch (message)
-    {
-    case WM_PAINT:
-    {
-        // paint a pretty picture
-        PAINTSTRUCT ps;
-        HDC hdc = BeginPaint(hwnd, &ps);
-        FlyoutPaint(hwnd, hdc);
-        EndPaint(hwnd, &ps);
-    }
-    break;
-    case WM_ACTIVATE:
-        if (LOWORD(wParam) == WA_INACTIVE)
+        case IDM_PAUSE:
         {
-            // when the flyout window loses focus, hide it.
-            PostMessage(GetParent(hwnd), WMAPP_HIDEFLYOUT, 0, 0);
+            paused = !paused;
+
+            if (!paused)
+            {
+                executeMonitorTimer(hwnd, 0, 0, 0);
+            }
+
+            break;
         }
+
+        case IDM_CAPTURE:
+            appendConfigToFile(MonitorSetup::getCurrent());
+            break;
+
+        case IDM_OPEN_CONFIG:
+        {
+            ShellExecute(0, 0, utf8ToUtf16(getConfigFilePath().string()).c_str(), 0, 0, SW_SHOW);
+            break;
+        }
+
+        case IDM_EXIT:
+            DestroyWindow(hwnd);
+            break;
+
+        default:
+            return DefWindowProc(hwnd, message, wParam, lParam);
+        }
+
+        break;
+    }
+
+    case WMAPP_NOTIFYCALLBACK:
+        switch (LOWORD(lParam))
+        {
+        case NIN_SELECT:
+            if (IsWindowVisible(s_hwndFlyout))
+            {
+                s_hwndFlyout = NULL;
+            }
+            break;
+
+        case WM_CONTEXTMENU:
+        {
+            POINT const pt = { LOWORD(wParam), HIWORD(wParam) };
+            ShowContextMenu(hwnd, pt);
+        }
+        break;
+        }
+        break;
+
+    case WM_DESTROY:
+        DeleteNotificationIcon();
+        PostQuitMessage(0);
         break;
     default:
         return DefWindowProc(hwnd, message, wParam, lParam);
