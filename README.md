@@ -34,4 +34,4 @@ Launch the debug version in Visual Studio to see a log console that will not dis
 
 ## Credits
 Icon from https://icon-icons.com/users/JupI7ALOpv56pZQJjRpQL/icon-sets/  
-Refers to demos from Microsoft
+MonitorRotationMemory.cpp is based on NotificationIcon.cpp from https://github.com/microsoft/Windows-classic-samples
