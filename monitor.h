@@ -13,6 +13,8 @@
 #include <codecvt>
 #include <filesystem>
 #include <fstream>
+#include <chrono>
+#include <thread>
 
 std::wstring utf8ToUtf16(const std::string& str)
 {
@@ -336,14 +338,26 @@ const MonitorSetup* findMatchingSetup(const MonitorSetup& current, const std::ve
 // Fixes monitor rotations to match the config file
 void fixMonitorRotations()
 {
-	auto current = MonitorSetup::getCurrent();
-	auto allSetups = readConfigFile();
+	bool fixed;
 
-	const MonitorSetup* nextSetup = findMatchingSetup(current, allSetups);
+	while (!fixed) {
+		try {
+			auto current = MonitorSetup::getCurrent();
+			auto allSetups = readConfigFile();
 
-	if (nextSetup != nullptr)
-	{
-		std::cout << "Applying new config\n";
-		nassert(current.setPropsFrom(*nextSetup));
+			const MonitorSetup* nextSetup = findMatchingSetup(current, allSetups);
+
+			if (nextSetup != nullptr)
+			{
+				std::cout << "Applying new config\n";
+				nassert(current.setPropsFrom(*nextSetup));
+			}
+
+			fixed = true;
+		}
+		catch (...) {
+			// Sleeping in the message thread is not great
+			std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+		}
 	}
 }

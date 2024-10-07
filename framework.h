@@ -21,8 +21,8 @@
 bool crash(const char* file, int line)
 {
 	std::cout << "Assertion failed in " << file << ":" << line << '\n';
-	exit(-1);
+	throw NULL;
 }
 
-// Yes, this leaves all file handles open
+// Logs and throws an exception if the assertion fails, which will be caught if possible
 #define nassert(cond) (!!(cond) || crash(__FILE__, __LINE__))
