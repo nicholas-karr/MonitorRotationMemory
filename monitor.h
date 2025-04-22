@@ -107,7 +107,11 @@ bool applyPropsToMonitor(std::wstring deviceName, const MonitorInfo& ref)
 	// Write with CDS_UPDATEREGISTRY and CDS_NORESET so that all monitors are changed in a single pass, than persisted at the end.
 	// This prevents positions that do not yet connect to a contiguous monitor from crashing the program.
 	long ret = ChangeDisplaySettingsEx(deviceName.c_str(), &mode, nullptr, (CDS_UPDATEREGISTRY | CDS_NORESET), nullptr);
-	nassert(ret == DISP_CHANGE_SUCCESSFUL);
+	if (ret != DISP_CHANGE_SUCCESSFUL)
+	{
+		std::wcout << L"Failed to change setting on monitor " << deviceName << " with error code " << ret << L"\n";
+		crash(__FILE__, __LINE__);
+	}
 
 	return true;
 }
@@ -338,7 +342,7 @@ const MonitorSetup* findMatchingSetup(const MonitorSetup& current, const std::ve
 // Fixes monitor rotations to match the config file
 void fixMonitorRotations()
 {
-	bool fixed;
+	bool fixed = false;
 
 	while (!fixed) {
 		try {
